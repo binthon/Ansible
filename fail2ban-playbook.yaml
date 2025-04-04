@@ -1,0 +1,129 @@
+---
+- name: Instalacja Fail2Ban 0.10.5 ze źródła
+  hosts: all
+  become: true
+
+  vars:
+    fail2ban_version: "0.10.5"
+    fail2ban_url: "https://github.com/fail2ban/fail2ban/archive/refs/tags/{{ fail2ban_version }}.tar.gz"
+    src_dir: "/usr/local/src/fail2ban-{{ fail2ban_version }}"
+    allowed_ips: "{{ groups['all'] | map('extract', hostvars, ['inventory_hostname']) | list }}"
+    ignoreip_line: "ignoreip = {{ allowed_ips | join(' ') }}"
+
+  tasks:
+    - name: Install required packages
+      package:
+        name:
+          - python3
+          - python3-systemd
+          - tar
+          - curl
+        state: present
+
+    - name: Create working directory
+      file:
+        path: /usr/local/src
+        state: directory
+
+    - name: Download Fail2Ban tarball
+      get_url:
+        url: "{{ fail2ban_url }}"
+        dest: "/usr/local/src/fail2ban-{{ fail2ban_version }}.tar.gz"
+        mode: '0644'
+
+    - name: Extract Fail2Ban tarball
+      unarchive:
+        src: "/usr/local/src/fail2ban-{{ fail2ban_version }}.tar.gz"
+        dest: /usr/local/src/
+        remote_src: yes
+
+    - name: Install Fail2Ban from source
+      command: python3 setup.py install
+      args:
+        chdir: "{{ src_dir }}"
+      notify: reload systemd
+
+    - name: Create Fail2Ban systemd service
+      copy:
+        dest: /etc/systemd/system/fail2ban.service
+        content: |
+          [Unit]
+          Description=Fail2Ban Service
+          After=syslog.target network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/fail2ban-server -xf start
+          ExecStop=/usr/local/bin/fail2ban-client stop
+          PIDFile=/var/run/fail2ban/fail2ban.pid
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: reload systemd
+
+    - name: Ensure Fail2Ban config directory exists
+      file:
+        path: /etc/fail2ban
+        state: directory
+        mode: '0755'
+
+    - name: Create jail.local if not exists
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: "[DEFAULT]\n"
+        force: no
+
+    - name: Set ignoreip in jail.local
+      lineinfile:
+        path: /etc/fail2ban/jail.local
+        regexp: '^ignoreip\s*='
+        insertafter: '^\[DEFAULT\]'
+        line: "{{ ignoreip_line }}"
+        create: yes
+        backup: yes
+
+    - name: Enable and start Fail2Ban
+      systemd:
+        name: fail2ban
+        enabled: true
+        state: started
+
+    - name: Create custom Fail2Ban filter for private IPs
+      copy:
+        dest: /etc/fail2ban/filter.d/sshd-private.conf
+        content: |
+          [Definition]
+          failregex = ^.*Failed (password|publickey) for .* from <HOST> port \d+ ssh2$
+          ignoreregex =
+        mode: '0644'
+
+    - name: Add jail for sshd-private to jail.local
+      blockinfile:
+        path: /etc/fail2ban/jail.local
+        block: |
+          [sshd-private]
+          enabled = true
+          filter = sshd-private
+          logpath = /var/log/secure
+          port = ssh
+          findtime = 30
+          maxretry = 5
+          bantime = 1h
+          action = iptables[name=SSH-Private, port=ssh, protocol=tcp]
+
+    - name: Patch iptables.conf action to ban only 10.x.x.x and 192.x.x.x
+      replace:
+        path: /etc/fail2ban/action.d/iptables.conf
+        regexp: '^actionban\s*=.*'
+        replace: 'actionban = echo "<ip>" | grep -E "^10\.|^192\." && iptables -I INPUT -s <ip> -p <protocol> --dport <port> -j REJECT'
+
+    - name: Restart Fail2Ban
+      systemd:
+        name: fail2ban
+        state: restarted
+
+
+  handlers:
+    - name: reload systemd
+      command: systemctl daemon-reload
+
