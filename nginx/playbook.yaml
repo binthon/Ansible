@@ -1,0 +1,21 @@
+- name: Static Web Hosting in Nginx
+  hosts: web
+  become: true
+  gather_facts: no
+
+  vars:
+    domain: "stronka.com"
+    webRoot: "/var/www/{{ domain }}"
+    email: "admin@xd.com"
+
+  tasks:
+    - name: install
+      import_tasks: install.yaml
+    - name: config
+      import_tasks: config.yaml
+  
+  handlers:
+  - name: Reload nginx
+    service:
+      name: nginx
+      state: reloaded

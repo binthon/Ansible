@@ -1,0 +1,20 @@
+- name: Create web root
+  file:
+    path: "{{ webRoot }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy example index.html
+  copy:
+    src: index.html
+    dest: "{{ webRoot }}/index.html"
+
+- name: Configure nginx vhost
+  template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/conf.d/{{ domain }}.conf"
+  notify: Reload nginx
+
+- name: Test nginx config
+  command: nginx -t
+
