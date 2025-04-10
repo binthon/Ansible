@@ -1,0 +1,56 @@
+- name: Install required software
+  dnf:
+    name:
+      - epel-release
+      - nginx
+      - snapd
+      - firewalld
+    state: present
+
+- name: start software
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - firewalld
+    - nginx
+
+- name: firewall config
+  firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - 80
+    - 443
+    - 6443 #k8s
+    - 7678 # a to nie wiem 
+- name: start snap
+  systemd:
+    name: snapd.socket
+    enabled: true
+    state: started
+
+- name: snap active
+  wait_for:
+    path: /run/snapd.socket
+    timeout: 10
+
+- name: symlink /snap
+  file:
+    src: /var/lib/snapd/snap
+    dest: /snap
+    state: link
+
+- name: install certbot
+  command: snap install --classic certbot
+  args:
+    creates: /snap/bin/certbot
+
+- name: link cerbot
+  file:
+    src: /snap/bin/certbot
+    dest: /usr/bin/certbot
+    state: link
